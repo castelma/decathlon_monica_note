@@ -1,0 +1,35 @@
+name: Genera Nota Time Off Monica
+
+on:
+  repository_dispatch:
+    types: [calendario_aggiornato]
+
+jobs:
+  genera-nota:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout decathlon_monica_note
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.NOTA_TOKEN }}
+
+      - name: Aspetta 30 minuti
+        run: sleep 1800
+
+      - name: Scarica i JSON da decathlon_monica_calendario
+        run: |
+          curl -s "https://raw.githubusercontent.com/castelma/decathlon_monica_calendario/main/data/events_mensile.json" -o events_mensile.json
+          curl -s "https://raw.githubusercontent.com/castelma/decathlon_monica_calendario/main/data/events_settimanale.json" -o events_settimanale.json
+
+      - name: Genera nota.txt e last_update.txt
+        run: |
+          python3 genera_nota.py
+
+      - name: Committa i file generati
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add nota.txt last_update.txt
+          git diff --staged --quiet || git commit -m "Aggiorna nota Time Off Monica"
+          git push
