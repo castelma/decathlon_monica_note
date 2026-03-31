@@ -12,11 +12,10 @@ MESI = [
 
 
 # ---------------------------------------------------------------------------
-# Festivi aziendali (non rompono la catena di merge)
+# Festivi aziendali
 # ---------------------------------------------------------------------------
 
 def calcola_pasqua(anno):
-    """Algoritmo di Butcher per il calcolo della Pasqua."""
     a = anno % 19
     b = anno // 100
     c = anno % 100
@@ -38,26 +37,18 @@ def festivi_aziendali(anno):
     pasqua = calcola_pasqua(anno)
     pasquetta = pasqua + timedelta(days=1)
     return {
-        date(anno, 1, 1),   # Capodanno
-        pasqua,             # Pasqua
-        pasquetta,          # Pasquetta
-        date(anno, 8, 15),  # Ferragosto
-        date(anno, 12, 25), # Natale
-        date(anno, 12, 26), # Santo Stefano
+        date(anno, 1, 1),    # Capodanno
+        pasqua,              # Pasqua
+        pasquetta,           # Pasquetta
+        date(anno, 8, 15),   # Ferragosto
+        date(anno, 12, 25),  # Natale
+        date(anno, 12, 26),  # Santo Stefano
     }
 
 
-def is_festivo(d, festivi):
-    return d in festivi
-
-
-def is_weekend(d):
-    return d.weekday() >= 5  # sabato=5, domenica=6
-
-
 def is_giorno_trasparente(d, festivi):
-    """Sabato, domenica o festivo aziendale: non rompe la catena."""
-    return is_weekend(d) or is_festivo(d, festivi)
+    """Sabato, domenica o festivo aziendale: non rompe la catena di merge."""
+    return d.weekday() >= 5 or d in festivi
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +56,6 @@ def is_giorno_trasparente(d, festivi):
 # ---------------------------------------------------------------------------
 
 def formato_data(d):
-    """date → 'Lunedì 7 Aprile'"""
     return f"{GIORNI[d.weekday()]} {d.day} {MESI[d.month - 1]}"
 
 
@@ -88,9 +78,9 @@ def is_in_attesa(title):
 
 def carica_eventi(filename):
     """
-    Legge un JSON e restituisce una lista di dict normalizzati:
-    { date: date, end_date: date, tipo: str, in_attesa: bool, uid: str }
+    Legge un JSON e restituisce lista di dict normalizzati.
     Gli eventi multi-giorno (end_date) vengono espansi giorno per giorno.
+    end_date è ESCLUSIVO (convenzione iCalendar) → sottraiamo 1 giorno.
     """
     try:
         with open(filename) as f:
@@ -109,8 +99,8 @@ def carica_eventi(filename):
         data_inizio = date.fromisoformat(e["date"])
 
         if e.get("end_date"):
-            # evento all-day multi-giorno: espandi
-            data_fine = date.fromisoformat(e["end_date"])
+            # end_date è esclusivo → -1 giorno
+            data_fine = date.fromisoformat(e["end_date"]) - timedelta(days=1)
             d = data_inizio
             while d <= data_fine:
                 risultato.append({
@@ -138,21 +128,17 @@ def carica_eventi(filename):
 def merge_blocchi(eventi_per_giorno, festivi):
     """
     eventi_per_giorno: dict { date: set of (tipo, in_attesa) }
-    Restituisce lista di blocchi merged:
-    { date_start, date_end, tipi: set, in_attesa_per_tipo: dict }
+    Restituisce lista di blocchi merged.
     """
     if not eventi_per_giorno:
         return []
 
     date_con_eventi = sorted(eventi_per_giorno.keys())
     blocchi = []
-    
+
     # Inizializza primo blocco
     blocco_start = date_con_eventi[0]
     blocco_end = date_con_eventi[0]
-    blocco_dati = dict(eventi_per_giorno[date_con_eventi[0]])
-    # blocco_dati: { tipo: [in_attesa, ...] }
-    # usiamo lista per raccogliere tutti i valori in_attesa per tipo
     blocco_tipi_attesa = {}
     for tipo, attesa in eventi_per_giorno[date_con_eventi[0]]:
         if tipo not in blocco_tipi_attesa:
@@ -168,26 +154,22 @@ def merge_blocchi(eventi_per_giorno, festivi):
         d = data_prec + timedelta(days=1)
         while d < data_curr:
             if not is_giorno_trasparente(d, festivi):
-                # giorno feriale non festivo senza eventi → rompe
                 rompe = True
                 break
             d += timedelta(days=1)
 
         if rompe:
-            # Salva blocco corrente
             blocchi.append({
                 "date_start": blocco_start,
                 "date_end": blocco_end,
                 "tipi_attesa": blocco_tipi_attesa,
             })
-            # Inizia nuovo blocco
             blocco_start = data_curr
             blocco_end = data_curr
             blocco_tipi_attesa = {}
             for tipo, attesa in eventi_per_giorno[data_curr]:
                 blocco_tipi_attesa[tipo] = [attesa]
         else:
-            # Estendi blocco corrente
             blocco_end = data_curr
             for tipo, attesa in eventi_per_giorno[data_curr]:
                 if tipo not in blocco_tipi_attesa:
@@ -211,7 +193,7 @@ def merge_blocchi(eventi_per_giorno, festivi):
 def formatta_blocco(blocco):
     date_start = blocco["date_start"]
     date_end = blocco["date_end"]
-    tipi_attesa = blocco["tipi_attesa"]  # { "INDISPO": [True, False], "FERIE": [False] }
+    tipi_attesa = blocco["tipi_attesa"]
 
     # Emoji
     ha_indispo = "INDISPO" in tipi_attesa
@@ -227,30 +209,29 @@ def formatta_blocco(blocco):
     if date_start == date_end:
         data_str = formato_data(date_start)
     else:
-        inizio = formato_data(date_start)
-        # Per la data fine, se stesso mese ometti il mese dall'inizio
         if date_start.month == date_end.month:
-            inizio_corta = f"{GIORNI[date_start.weekday()]} {date_start.day}"
+            inizio_corta = (
+                f"{GIORNI[date_start.weekday()]} {date_start.day}"
+            )
             data_str = f"{inizio_corta} → {formato_data(date_end)}"
         else:
-            data_str = f"{inizio} → {formato_data(date_end)}"
+            data_str = (
+                f"{formato_data(date_start)} → {formato_data(date_end)}"
+            )
 
     riga_data = f"   {em} {data_str}"
 
-    # Label tipi
-    # Ordine: prima INDISPO poi FERIE
+    # Label: prima INDISPO poi FERIE
     parti = []
     for tipo in ["INDISPO", "FERIE"]:
         if tipo not in tipi_attesa:
             continue
-        attese = tipi_attesa[tipo]
-        if any(attese):
+        if any(tipi_attesa[tipo]):
             parti.append(f"{tipo} (in attesa)")
         else:
             parti.append(tipo)
 
-    label = " / ".join(parti)
-    riga_label = f"      {label}"
+    riga_label = f"      {' / '.join(parti)}"
 
     return riga_data, riga_label
 
@@ -263,19 +244,17 @@ def genera_nota():
     oggi = date.today()
     mese_corrente = oggi.replace(day=1)
 
-    # Carica da entrambi i file e deduplicazione per (date, tipo)
+    # Carica da entrambi i file
     tutti = carica_eventi("events_mensile.json")
     tutti += carica_eventi("events_settimanale.json")
 
-    # Deduplicazione per (date, tipo) — in caso di duplicati,
-    # preferisce quello "in attesa" = False (già approvato)
+    # Deduplicazione per (date, tipo) — preferisce approvato su in attesa
     dedup = {}
     for e in tutti:
         key = (e["date"], e["tipo"])
         if key not in dedup:
             dedup[key] = e
         else:
-            # Se uno è approvato (in_attesa=False), prevale
             if not e["in_attesa"]:
                 dedup[key] = e
 
@@ -300,29 +279,28 @@ def genera_nota():
             eventi_per_giorno[d] = set()
         eventi_per_giorno[d].add((e["tipo"], e["in_attesa"]))
 
-    # Raccogli tutti gli anni coinvolti per i festivi
+    # Festivi per tutti gli anni coinvolti
     anni = {d.year for d in eventi_per_giorno}
     festivi = set()
     for anno in anni:
         festivi |= festivi_aziendali(anno)
 
-    # Merge blocchi
+    # Merge
     blocchi = merge_blocchi(eventi_per_giorno, festivi)
 
-    # Timestamp italiano (gestione ora legale)
+    # Timestamp italiano
     try:
         from zoneinfo import ZoneInfo
         now_it = datetime.now(ZoneInfo("Europe/Rome"))
     except ImportError:
         now_it = datetime.utcnow() + timedelta(hours=2)
 
-    giorno_oggi = now_it.day
-    mese_oggi = MESI[now_it.month - 1][:3]
-    anno_oggi = now_it.year
-    ora_oggi = now_it.strftime("%H:%M")
-    timestamp = f"{giorno_oggi} {mese_oggi} {anno_oggi} ore {ora_oggi}"
+    timestamp = (
+        f"{now_it.day} {MESI[now_it.month - 1][:3]} "
+        f"{now_it.year} ore {now_it.strftime('%H:%M')}"
+    )
 
-    # Costruisci nota raggruppando per mese (del date_start del blocco)
+    # Costruisci nota
     lines = []
     lines.append("📋 Calendario Monica")
     lines.append(f"🔄 Aggiornato: {timestamp}")
