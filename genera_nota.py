@@ -56,9 +56,12 @@ def processa_file(filename):
 def genera_nota():
     eventi = []
     for fname in ["events_mensile.json", "events_settimanale.json"]:
-        eventi += processa_file(fname)
+        try:
+            eventi += processa_file(fname)
+        except FileNotFoundError:
+            print(f"⚠️ File {fname} non trovato, skip")
 
-    # Deduplica per uid (date + tipo)
+    # Deduplica per date + tipo
     seen = set()
     unici = []
     for e in eventi:
@@ -80,7 +83,11 @@ def genera_nota():
 
     # Timestamp aggiornamento ora italiana (UTC+2)
     now_it = datetime.utcnow() + timedelta(hours=2)
-    timestamp = f"{now_it.day} {MESI[now_it.month - 1]} {now_it.year} ore {now_it.strftime('%H:%M')}"
+    giorno = now_it.day
+    mese = MESI[now_it.month - 1][:3]
+    anno = now_it.year
+    ora = now_it.strftime("%H:%M")
+    timestamp = f"{giorno} {mese} {anno} ore {ora}"
 
     # Costruisci nota
     lines = []
