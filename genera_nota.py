@@ -1,19 +1,19 @@
 import json
-import os
-from datetime import date, timedelta, datetime
+from datetime import date, datetime, timedelta
 
-# ── Costanti ────────────────────────────────────────────────────────────────
+GIORNI = [
+    "Lunedì", "Martedì", "Mercoledì", "Giovedì",
+    "Venerdì", "Sabato", "Domenica"
+]
+MESI = [
+    "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno",
+    "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"
+]
 
-MENSILE_PATH = "../decathlon_monica_calendario/data/events_mensile.json"
-SETTIMANALE_PATH = "../decathlon_monica_calendario/data/events_settimanale.json"
-NOTA_PATH = "nota.txt"
-LAST_UPDATE_PATH = "last_update.txt"
 
-GIORNI_ITA = ["Lunedì","Martedì","Mercoledì","Giovedì","Venerdì","Sabato","Domenica"]
-MESI_ITA = ["","Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
-            "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"]
-
-# ── Festivi aziendali ────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Festivi aziendali (non rompono la catena di merge)
+# ---------------------------------------------------------------------------
 
 def calcola_pasqua(anno):
     """Algoritmo di Butcher per il calcolo della Pasqua."""
@@ -33,10 +33,11 @@ def calcola_pasqua(anno):
     giorno = ((h + l - 7 * m + 114) % 31) + 1
     return date(anno, mese, giorno)
 
-def get_festivi(anno):
+
+def festivi_aziendali(anno):
     pasqua = calcola_pasqua(anno)
     pasquetta = pasqua + timedelta(days=1)
-    festivi = {
+    return {
         date(anno, 1, 1),   # Capodanno
         pasqua,             # Pasqua
         pasquetta,          # Pasquetta
@@ -44,272 +45,311 @@ def get_festivi(anno):
         date(anno, 12, 25), # Natale
         date(anno, 12, 26), # Santo Stefano
     }
-    return festivi
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def is_festivo(d, festivi):
+    return d in festivi
+
 
 def is_weekend(d):
-    return d.weekday() >= 5  # 5=Sabato, 6=Domenica
+    return d.weekday() >= 5  # sabato=5, domenica=6
 
-def is_festivo(d, festivi_cache):
-    anno = d.year
-    if anno not in festivi_cache:
-        festivi_cache[anno] = get_festivi(anno)
-    return d in festivi_cache[anno]
 
-def is_giorno_ignorato(d, festivi_cache):
-    """Weekend o festivo aziendale → non rompe la catena."""
-    return is_weekend(d) or is_festivo(d, festivi_cache)
+def is_giorno_trasparente(d, festivi):
+    """Sabato, domenica o festivo aziendale: non rompe la catena."""
+    return is_weekend(d) or is_festivo(d, festivi)
 
-def format_data(d):
-    return f"{GIORNI_ITA[d.weekday()]} {d.day} {MESI_ITA[d.month]}"
 
-def format_data_corta(d):
-    return f"{GIORNI_ITA[d.weekday()]} {d.day}"
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-# ── Parsing eventi ────────────────────────────────────────────────────────────
+def formato_data(d):
+    """date → 'Lunedì 7 Aprile'"""
+    return f"{GIORNI[d.weekday()]} {d.day} {MESI[d.month - 1]}"
 
-def is_ferie(title):
-    return "FERIE" in title.upper()
 
-def is_indispo(title):
-    return "INDISPO" in title.upper()
+def classifica_evento(title):
+    t = title.upper()
+    if "INDISPO" in t:
+        return "INDISPO"
+    if "FERIE" in t:
+        return "FERIE"
+    return None
 
-def is_rilevante(title):
-    return is_ferie(title) or is_indispo(title)
 
-def has_punto_interrogativo(title):
+def is_in_attesa(title):
     return "?" in title
 
-def parse_eventi(data):
+
+# ---------------------------------------------------------------------------
+# Caricamento e normalizzazione eventi
+# ---------------------------------------------------------------------------
+
+def carica_eventi(filename):
     """
-    Restituisce lista di dict con:
-      - date_start: date
-      - date_end: date (inclusa)
-      - title: str
-      - is_ferie: bool
-      - is_indispo: bool
-      - in_attesa: bool
+    Legge un JSON e restituisce una lista di dict normalizzati:
+    { date: date, end_date: date, tipo: str, in_attesa: bool, uid: str }
+    Gli eventi multi-giorno (end_date) vengono espansi giorno per giorno.
     """
-    eventi = []
-    for ev in data:
-        title = ev.get("title", "")
-        if not is_rilevante(title):
-            continue
-        try:
-            d_start = date.fromisoformat(ev["date"])
-        except Exception:
-            continue
-        end_date_raw = ev.get("end_date")
-        if end_date_raw:
-            try:
-                d_end = date.fromisoformat(end_date_raw)
-            except Exception:
-                d_end = d_start
-        else:
-            d_end = d_start
-
-        eventi.append({
-            "date_start": d_start,
-            "date_end": d_end,
-            "title": title,
-            "is_ferie": is_ferie(title),
-            "is_indispo": is_indispo(title),
-            "in_attesa": has_punto_interrogativo(title),
-        })
-    return eventi
-
-# ── Deduplicazione ────────────────────────────────────────────────────────────
-
-def deduplicа_eventi(eventi):
-    """Rimuove duplicati con stesso uid logico (stesso date_start+date_end+tipo)."""
-    seen = set()
-    result = []
-    for ev in eventi:
-        key = (ev["date_start"], ev["date_end"], ev["is_ferie"], ev["is_indispo"])
-        if key not in seen:
-            seen.add(key)
-            result.append(ev)
-    return result
-
-# ── Espansione in giorni ──────────────────────────────────────────────────────
-
-def espandi_in_giorni(eventi):
-    """
-    Ogni evento (anche multi-day) viene espanso in una entry per giorno.
-    Restituisce lista di dict: {date, is_ferie, is_indispo, in_attesa}
-    """
-    giorni = {}
-    for ev in eventi:
-        current = ev["date_start"]
-        while current <= ev["date_end"]:
-            if current not in giorni:
-                giorni[current] = {"is_ferie": False, "is_indispo": False, "in_attesa_ferie": False, "in_attesa_indispo": False}
-            if ev["is_ferie"]:
-                giorni[current]["is_ferie"] = True
-                if ev["in_attesa"]:
-                    giorni[current]["in_attesa_ferie"] = True
-            if ev["is_indispo"]:
-                giorni[current]["is_indispo"] = True
-                if ev["in_attesa"]:
-                    giorni[current]["in_attesa_indispo"] = True
-            current += timedelta(days=1)
-    return giorni
-
-# ── Merge in blocchi ──────────────────────────────────────────────────────────
-
-def merge_in_blocchi(giorni_dict, festivi_cache):
-    """
-    Raggruppa i giorni con eventi in blocchi contigui.
-    La catena non si rompe se i giorni vuoti in mezzo sono tutti weekend o festivi.
-    """
-    if not giorni_dict:
+    try:
+        with open(filename) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        print(f"⚠️  {filename} non trovato, skip")
         return []
 
-    date_ordinate = sorted(giorni_dict.keys())
+    risultato = []
+    for e in raw:
+        tipo = classifica_evento(e["title"])
+        if not tipo:
+            continue
+
+        attesa = is_in_attesa(e["title"])
+        data_inizio = date.fromisoformat(e["date"])
+
+        if e.get("end_date"):
+            # evento all-day multi-giorno: espandi
+            data_fine = date.fromisoformat(e["end_date"])
+            d = data_inizio
+            while d <= data_fine:
+                risultato.append({
+                    "date": d,
+                    "tipo": tipo,
+                    "in_attesa": attesa,
+                    "uid": e.get("uid", ""),
+                })
+                d += timedelta(days=1)
+        else:
+            risultato.append({
+                "date": data_inizio,
+                "tipo": tipo,
+                "in_attesa": attesa,
+                "uid": e.get("uid", ""),
+            })
+
+    return risultato
+
+
+# ---------------------------------------------------------------------------
+# Merge blocchi consecutivi
+# ---------------------------------------------------------------------------
+
+def merge_blocchi(eventi_per_giorno, festivi):
+    """
+    eventi_per_giorno: dict { date: set of (tipo, in_attesa) }
+    Restituisce lista di blocchi merged:
+    { date_start, date_end, tipi: set, in_attesa_per_tipo: dict }
+    """
+    if not eventi_per_giorno:
+        return []
+
+    date_con_eventi = sorted(eventi_per_giorno.keys())
     blocchi = []
     
-    # Primo blocco
-    blocco_start = date_ordinate[0]
-    blocco_end = date_ordinate[0]
-    blocco_giorni = [date_ordinate[0]]
+    # Inizializza primo blocco
+    blocco_start = date_con_eventi[0]
+    blocco_end = date_con_eventi[0]
+    blocco_dati = dict(eventi_per_giorno[date_con_eventi[0]])
+    # blocco_dati: { tipo: [in_attesa, ...] }
+    # usiamo lista per raccogliere tutti i valori in_attesa per tipo
+    blocco_tipi_attesa = {}
+    for tipo, attesa in eventi_per_giorno[date_con_eventi[0]]:
+        if tipo not in blocco_tipi_attesa:
+            blocco_tipi_attesa[tipo] = []
+        blocco_tipi_attesa[tipo].append(attesa)
 
-    for i in range(1, len(date_ordinate)):
-        prev = date_ordinate[i - 1]
-        curr = date_ordinate[i]
+    for i in range(1, len(date_con_eventi)):
+        data_prec = date_con_eventi[i - 1]
+        data_curr = date_con_eventi[i]
 
-        # Controlla i giorni tra prev e curr (esclusi)
+        # Controlla se c'è un giorno feriale non festivo vuoto tra i due
         rompe = False
-        giorno_check = prev + timedelta(days=1)
-        while giorno_check < curr:
-            if not is_giorno_ignorato(giorno_check, festivi_cache):
+        d = data_prec + timedelta(days=1)
+        while d < data_curr:
+            if not is_giorno_trasparente(d, festivi):
+                # giorno feriale non festivo senza eventi → rompe
                 rompe = True
                 break
-            giorno_check += timedelta(days=1)
+            d += timedelta(days=1)
 
         if rompe:
-            blocchi.append((blocco_start, blocco_end, blocco_giorni))
-            blocco_start = curr
-            blocco_giorni = [curr]
+            # Salva blocco corrente
+            blocchi.append({
+                "date_start": blocco_start,
+                "date_end": blocco_end,
+                "tipi_attesa": blocco_tipi_attesa,
+            })
+            # Inizia nuovo blocco
+            blocco_start = data_curr
+            blocco_end = data_curr
+            blocco_tipi_attesa = {}
+            for tipo, attesa in eventi_per_giorno[data_curr]:
+                blocco_tipi_attesa[tipo] = [attesa]
         else:
-            blocco_giorni.append(curr)
+            # Estendi blocco corrente
+            blocco_end = data_curr
+            for tipo, attesa in eventi_per_giorno[data_curr]:
+                if tipo not in blocco_tipi_attesa:
+                    blocco_tipi_attesa[tipo] = []
+                blocco_tipi_attesa[tipo].append(attesa)
 
-        blocco_end = curr
+    # Ultimo blocco
+    blocchi.append({
+        "date_start": blocco_start,
+        "date_end": blocco_end,
+        "tipi_attesa": blocco_tipi_attesa,
+    })
 
-    blocchi.append((blocco_start, blocco_end, blocco_giorni))
     return blocchi
 
-# ── Formattazione blocco ──────────────────────────────────────────────────────
 
-def formatta_blocco(blocco_start, blocco_end, blocco_giorni, giorni_dict):
-    has_ferie = any(giorni_dict[g]["is_ferie"] for g in blocco_giorni)
-    has_indispo = any(giorni_dict[g]["is_indispo"] for g in blocco_giorni)
+# ---------------------------------------------------------------------------
+# Formattazione blocco
+# ---------------------------------------------------------------------------
+
+def formatta_blocco(blocco):
+    date_start = blocco["date_start"]
+    date_end = blocco["date_end"]
+    tipi_attesa = blocco["tipi_attesa"]  # { "INDISPO": [True, False], "FERIE": [False] }
 
     # Emoji
-    if has_indispo and has_ferie:
-        emoji = "⛔🏖️"
-    elif has_indispo:
-        emoji = "⛔"
+    ha_indispo = "INDISPO" in tipi_attesa
+    ha_ferie = "FERIE" in tipi_attesa
+    if ha_indispo and ha_ferie:
+        em = "⛔🏖️"
+    elif ha_indispo:
+        em = "⛔"
     else:
-        emoji = "🏖️"
-
-    # In attesa per tipo
-    parti_tipo = []
-    if has_indispo:
-        in_attesa_indispo = any(giorni_dict[g]["in_attesa_indispo"] for g in blocco_giorni)
-        parti_tipo.append("INDISPO (in attesa)" if in_attesa_indispo else "INDISPO")
-    if has_ferie:
-        in_attesa_ferie = any(giorni_dict[g]["in_attesa_ferie"] for g in blocco_giorni)
-        parti_tipo.append("FERIE (in attesa)" if in_attesa_ferie else "FERIE")
-
-    tipo_str = " / ".join(parti_tipo)
+        em = "🏖️"
 
     # Data
-    if blocco_start == blocco_end:
-        data_str = format_data(blocco_start)
-    elif blocco_start.month == blocco_end.month:
-        data_str = f"{format_data_corta(blocco_start)} → {format_data_corta(blocco_end)} {MESI_ITA[blocco_end.month]}"
+    if date_start == date_end:
+        data_str = formato_data(date_start)
     else:
-        data_str = f"{format_data(blocco_start)} → {format_data(blocco_end)}"
+        inizio = formato_data(date_start)
+        # Per la data fine, se stesso mese ometti il mese dall'inizio
+        if date_start.month == date_end.month:
+            inizio_corta = f"{GIORNI[date_start.weekday()]} {date_start.day}"
+            data_str = f"{inizio_corta} → {formato_data(date_end)}"
+        else:
+            data_str = f"{inizio} → {formato_data(date_end)}"
 
-    return f"   {emoji} {data_str}\n      {tipo_str}"
+    riga_data = f"   {em} {data_str}"
 
-# ── Generazione nota ──────────────────────────────────────────────────────────
+    # Label tipi
+    # Ordine: prima INDISPO poi FERIE
+    parti = []
+    for tipo in ["INDISPO", "FERIE"]:
+        if tipo not in tipi_attesa:
+            continue
+        attese = tipi_attesa[tipo]
+        if any(attese):
+            parti.append(f"{tipo} (in attesa)")
+        else:
+            parti.append(tipo)
 
-def genera_nota(eventi):
+    label = " / ".join(parti)
+    riga_label = f"      {label}"
+
+    return riga_data, riga_label
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def genera_nota():
     oggi = date.today()
     mese_corrente = oggi.replace(day=1)
-    festivi_cache = {}
+
+    # Carica da entrambi i file e deduplicazione per (date, tipo)
+    tutti = carica_eventi("events_mensile.json")
+    tutti += carica_eventi("events_settimanale.json")
+
+    # Deduplicazione per (date, tipo) — in caso di duplicati,
+    # preferisce quello "in attesa" = False (già approvato)
+    dedup = {}
+    for e in tutti:
+        key = (e["date"], e["tipo"])
+        if key not in dedup:
+            dedup[key] = e
+        else:
+            # Se uno è approvato (in_attesa=False), prevale
+            if not e["in_attesa"]:
+                dedup[key] = e
 
     # Filtra mesi passati
-    eventi_filtrati = [
-        ev for ev in eventi
-        if ev["date_end"] >= mese_corrente
+    filtrati = [
+        e for e in dedup.values()
+        if e["date"] >= mese_corrente
     ]
 
-    if not eventi_filtrati:
-        return "📋 Calendario Monica\n\nNessun evento trovato."
+    if not filtrati:
+        with open("nota.txt", "w") as f:
+            f.write("📋 Calendario Monica\n🔄 Nessun evento futuro.")
+        with open("last_update.txt", "w") as f:
+            f.write(datetime.utcnow().isoformat())
+        return
 
-    giorni_dict = espandi_in_giorni(eventi_filtrati)
-    blocchi = merge_in_blocchi(giorni_dict, festivi_cache)
+    # Costruisci dict { date: set of (tipo, in_attesa) }
+    eventi_per_giorno = {}
+    for e in filtrati:
+        d = e["date"]
+        if d not in eventi_per_giorno:
+            eventi_per_giorno[d] = set()
+        eventi_per_giorno[d].add((e["tipo"], e["in_attesa"]))
 
-    # Raggruppa blocchi per mese (mese del giorno iniziale)
-    blocchi_per_mese = {}
-    for blocco_start, blocco_end, blocco_giorni in blocchi:
-        mese_key = blocco_start.replace(day=1)
-        if mese_key not in blocchi_per_mese:
-            blocchi_per_mese[mese_key] = []
-        blocchi_per_mese[mese_key].append((blocco_start, blocco_end, blocco_giorni))
+    # Raccogli tutti gli anni coinvolti per i festivi
+    anni = {d.year for d in eventi_per_giorno}
+    festivi = set()
+    for anno in anni:
+        festivi |= festivi_aziendali(anno)
 
-    now = datetime.now()
-    timestamp = now.strftime("%-d %b %Y ore %H:%M").replace(
-        now.strftime("%b"),
-        MESI_ITA[now.month][:3]
-    )
+    # Merge blocchi
+    blocchi = merge_blocchi(eventi_per_giorno, festivi)
 
-    righe = [
-        "📋 Calendario Monica",
-        f"🔄 Aggiornato: {timestamp}",
-    ]
+    # Timestamp italiano (gestione ora legale)
+    try:
+        from zoneinfo import ZoneInfo
+        now_it = datetime.now(ZoneInfo("Europe/Rome"))
+    except ImportError:
+        now_it = datetime.utcnow() + timedelta(hours=2)
 
-    for mese_key in sorted(blocchi_per_mese.keys()):
-        nome_mese = MESI_ITA[mese_key.month].upper()
-        righe.append(f"\n━━━━━━ {nome_mese} ━━━━━━\n")
-        for blocco_start, blocco_end, blocco_giorni in blocchi_per_mese[mese_key]:
-            righe.append(formatta_blocco(blocco_start, blocco_end, blocco_giorni, giorni_dict))
+    giorno_oggi = now_it.day
+    mese_oggi = MESI[now_it.month - 1][:3]
+    anno_oggi = now_it.year
+    ora_oggi = now_it.strftime("%H:%M")
+    timestamp = f"{giorno_oggi} {mese_oggi} {anno_oggi} ore {ora_oggi}"
 
-    return "\n".join(righe)
+    # Costruisci nota raggruppando per mese (del date_start del blocco)
+    lines = []
+    lines.append("📋 Calendario Monica")
+    lines.append(f"🔄 Aggiornato: {timestamp}")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+    mese_corrente_str = None
+    for blocco in blocchi:
+        mese_blocco = MESI[blocco["date_start"].month - 1].upper()
+        if mese_blocco != mese_corrente_str:
+            lines.append("")
+            lines.append(f"━━━━━━ {mese_blocco} ━━━━━━")
+            mese_corrente_str = mese_blocco
 
-def main():
-    # Carica e unisce i due JSON
-    tutti_eventi = []
-    for path in [MENSILE_PATH, SETTIMANALE_PATH]:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                    tutti_eventi.extend(parse_eventi(data))
-                except json.JSONDecodeError:
-                    print(f"Errore parsing {path}")
+        lines.append("")
+        riga_data, riga_label = formatta_blocco(blocco)
+        lines.append(riga_data)
+        lines.append(riga_label)
 
-    tutti_eventi = deduplicа_eventi(tutti_eventi)
-    tutti_eventi.sort(key=lambda ev: (ev["date_start"], ev["date_end"]))
+    nota = "\n".join(lines)
 
-    nota = genera_nota(tutti_eventi)
-
-    with open(NOTA_PATH, "w", encoding="utf-8") as f:
+    with open("nota.txt", "w") as f:
         f.write(nota)
 
-    now = datetime.now()
-    timestamp = now.strftime("%Y-%m-%dT%H:%M:%S")
-    with open(LAST_UPDATE_PATH, "w", encoding="utf-8") as f:
-        f.write(timestamp)
+    with open("last_update.txt", "w") as f:
+        f.write(datetime.utcnow().isoformat())
 
     print("✅ nota.txt e last_update.txt generati")
-    print("\n--- ANTEPRIMA ---\n")
     print(nota)
 
-if __name__ == "__main__":
-    main()
+
+genera_nota()
