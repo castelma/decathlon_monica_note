@@ -3,6 +3,7 @@ name: Genera Nota Time Off Monica
 on:
   repository_dispatch:
     types: [calendario_aggiornato]
+  workflow_dispatch:
 
 jobs:
   genera-nota:
@@ -13,9 +14,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.NOTA_TOKEN }}
-
-      - name: Aspetta 30 minuti
-        run: sleep 1800
 
       - name: Scarica i JSON da decathlon_monica_calendario
         run: |
