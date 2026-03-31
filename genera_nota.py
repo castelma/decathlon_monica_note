@@ -1,8 +1,5 @@
 import json
-from datetime import datetime, date
-import locale
-
-locale.setlocale(locale.LC_TIME, "it_IT.UTF-8")
+from datetime import datetime, timedelta
 
 GIORNI = [
     "Lunedì", "Martedì", "Mercoledì", "Giovedì",
@@ -81,12 +78,9 @@ def genera_nota():
             mesi[m] = []
         mesi[m].append(e)
 
-    # Timestamp aggiornamento (ora italiana)
-    now = datetime.utcnow()
-    # UTC+2 in estate, UTC+1 in inverno — usiamo ora UTC+1 (CET)
-    from datetime import timedelta
-    now_it = now + timedelta(hours=2)
-    timestamp = now_it.strftime("%-d %b %Y ore %H:%M")
+    # Timestamp aggiornamento ora italiana (UTC+2)
+    now_it = datetime.utcnow() + timedelta(hours=2)
+    timestamp = f"{now_it.day} {MESI[now_it.month - 1]} {now_it.year} ore {now_it.strftime('%H:%M')}"
 
     # Costruisci nota
     lines = []
